@@ -8,3 +8,4 @@ build_ebook.log
 temp_ebook.md
 ebook/*.pdf
 ebook/*.epub
+build
