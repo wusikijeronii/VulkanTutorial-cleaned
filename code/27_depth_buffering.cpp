@@ -199,6 +199,8 @@ private:
   uint32_t currentFrame = 0;
 
   bool framebufferResized = false;
+  std::vector<VkCommandBuffer> _secondary0;
+  std::vector<VkCommandBuffer> _secondary1;
 
   void initWindow() {
     glfwInit();
@@ -736,8 +738,12 @@ private:
   }
 
   void createGraphicsPipeline() {
-    auto vertShaderCode = readFile("C:\\Users\\alekesej/Documents/Programming/Tests/VulkanTutorial-cleaned/build/27_depth_buffering/shaders/vert.spv");
-    auto fragShaderCode = readFile("C:\\Users\\alekesej/Documents/Programming/Tests/VulkanTutorial-cleaned/build/27_depth_buffering/shaders/frag.spv");
+    auto vertShaderCode = readFile(
+        "C:\\Users\\alekesej/Documents/Programming/Tests/"
+        "VulkanTutorial-cleaned/build/27_depth_buffering/shaders/vert.spv");
+    auto fragShaderCode = readFile(
+        "C:\\Users\\alekesej/Documents/Programming/Tests/"
+        "VulkanTutorial-cleaned/build/27_depth_buffering/shaders/frag.spv");
 
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -1305,8 +1311,7 @@ private:
       descriptorWrites[2].dstSet = descriptorSets[i];
       descriptorWrites[2].dstBinding = 2;
       descriptorWrites[2].dstArrayElement = 0;
-      descriptorWrites[2].descriptorType =
-      VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+      descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
       descriptorWrites[2].descriptorCount = 1;
       descriptorWrites[2].pImageInfo = &depthImageInfo;
 
@@ -1418,6 +1423,22 @@ private:
         VK_SUCCESS) {
       throw std::runtime_error("failed to allocate command buffers!");
     }
+
+    _secondary0.resize(MAX_FRAMES_IN_FLIGHT);
+    _secondary1.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkCommandBufferAllocateInfo secondaryAlloc{};
+    secondaryAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    secondaryAlloc.commandPool = commandPool;
+    secondaryAlloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    secondaryAlloc.commandBufferCount = (uint32_t)MAX_FRAMES_IN_FLIGHT;
+
+    if (vkAllocateCommandBuffers(device, &secondaryAlloc, _secondary0.data()) !=
+            VK_SUCCESS ||
+        vkAllocateCommandBuffers(device, &secondaryAlloc, _secondary1.data()) !=
+            VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate secondary command buffers!");
+    }
   }
 
   void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
@@ -1444,38 +1465,83 @@ private:
     renderPassInfo.pClearValues = clearValues;
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo,
-                         VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
+                         VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      graphicsPipeline);
+    {
+      auto s0 = _secondary0[currentFrame];
+      VkCommandBufferInheritanceInfo s0Info{};
+      s0Info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+      s0Info.renderPass = renderPass;
+      s0Info.subpass = 0;
 
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = (float)swapChainExtent.width;
-    viewport.height = (float)swapChainExtent.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+      VkCommandBufferBeginInfo s0BeginInfo{};
+      s0BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+      s0BeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+      s0BeginInfo.pInheritanceInfo = &s0Info;
 
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = swapChainExtent;
-    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+      if (vkBeginCommandBuffer(s0, &s0BeginInfo) != VK_SUCCESS) {
+        throw std::runtime_error(
+            "failed to begin recording secondary command buffer!");
+      }
+      if (vkEndCommandBuffer(s0) != VK_SUCCESS) {
+        throw std::runtime_error("failed to end secondary command buffer!");
+      }
+      vkCmdExecuteCommands(commandBuffer, 1, &s0);
+    }
+    vkCmdNextSubpass(commandBuffer,
+                     VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
 
-    VkBuffer vertexBuffers[] = {vertexBuffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    {
+      auto s1 = _secondary1[currentFrame];
+      VkCommandBufferInheritanceInfo s1Info{};
+      s1Info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+      s1Info.renderPass = renderPass;
+      s1Info.subpass = 1;
 
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+      VkCommandBufferBeginInfo s1BeginInfo{};
+      s1BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+      s1BeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+      s1BeginInfo.pInheritanceInfo = &s1Info;
 
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout, 0, 1, &descriptorSets[currentFrame],
-                            0, nullptr);
+      if (vkBeginCommandBuffer(s1, &s1BeginInfo) != VK_SUCCESS) {
+        throw std::runtime_error(
+            "failed to begin recording secondary command buffer!");
+      }
 
-    vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0,
-                     0, 0);
+      vkCmdBindPipeline(s1, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+      VkViewport viewport{};
+      viewport.x = 0.0f;
+      viewport.y = 0.0f;
+      viewport.width = (float)swapChainExtent.width;
+      viewport.height = (float)swapChainExtent.height;
+      viewport.minDepth = 0.0f;
+      viewport.maxDepth = 1.0f;
+      vkCmdSetViewport(s1, 0, 1, &viewport);
+
+      VkRect2D scissor{};
+      scissor.offset = {0, 0};
+      scissor.extent = swapChainExtent;
+      vkCmdSetScissor(s1, 0, 1, &scissor);
+
+      VkBuffer vertexBuffers[] = {vertexBuffer};
+      VkDeviceSize offsets[] = {0};
+      vkCmdBindVertexBuffers(s1, 0, 1, vertexBuffers, offsets);
+
+      vkCmdBindIndexBuffer(s1, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+      vkCmdBindDescriptorSets(s1, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipelineLayout, 0, 1,
+                              &descriptorSets[currentFrame], 0, nullptr);
+
+      vkCmdDrawIndexed(s1, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+
+      if (vkEndCommandBuffer(s1) != VK_SUCCESS) {
+        throw std::runtime_error("failed to end secondary command buffer!");
+      }
+
+      vkCmdExecuteCommands(commandBuffer, 1, &s1);
+    }
 
     vkCmdEndRenderPass(commandBuffer);
 
